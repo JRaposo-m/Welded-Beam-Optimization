@@ -1,0 +1,545 @@
+% script geral
+
+clear;
+clc;
+clear all;
+
+N_pop = 30;
+P_elite = 0.3; % probabilidade de ter elite
+N_elite = round(P_elite * N_pop,0); % quantidade de membros da elite
+
+P_mut = 0.008; % P_mutação de valor intermédio
+
+P_cross = 0.9; % Probabilidade de ocorrer crossover
+
+%%% variaveis do penalty function
+C = 0.5;
+alfa = 2;
+beta = 2;
+
+%%%% Caracteristicas %%%
+
+% Defina as constantes do problema
+P = 6000;           % lb
+L = 14;             % in
+E = 30e6;           % psi
+G = 12e6;           % psi
+tau_max = 13600;    % psi
+sigma_max = 30000;  % psi
+delta_max = 0.25;   % in
+
+params = [P,L,E,G,tau_max,sigma_max,delta_max];
+
+%%%% Bounds %%%%
+
+lower = [0.125; 0.1; 0.1; 0.1];
+upper = [2.0; 10.0; 10.0; 2.0];
+
+%%%% Obter bits para cada xi %%%%
+
+casas_decimais = 3;
+n_bits = zeros(4,1);
+for i = 1:4
+
+    n_bits(i) = ceil(log2((upper(i) - lower(i)) * 10^casas_decimais + 1));
+
+end
+
+n_total_bits = sum(n_bits);
+
+
+
+%% ---------------- Experimentos (sem guardar ficheiros) ----------------
+N_runs    = 25;             % nº de execuções (ajusta)
+base_seed = 12345;          % seed base para reprodutibilidade
+t_run = zeros(N_runs, 1);
+
+results = repmat(struct(), N_runs, 1);
+
+for r = 1:N_runs
+    rng(base_seed + r, 'twister');   % sementes diferentes mas controladas
+    % rng('shuffle');
+     t_start = tic;
+    % ---- Executa o GA ----
+    [melhor_indiv, best_hist, pior_el_hist, k_stop, motivo_paragem, pen_hist, lambda_hist, best_real_hist, best_f_hist, std_hist, entropia_x, pop_checkpoints, k_checkpoints, elite_checkpoints] = genetic_algorithm( ...
+        params, N_pop, N_elite, P_mut, P_cross, n_bits, n_total_bits, upper, lower, C, alfa, beta);
+    t_run(r) = toc(t_start);          % guarda o tempo desta run
+    
+    % ---- Métricas finais ----
+    best_merit_final = best_hist(end);
+    pior_el_merit_final = pior_el_hist(end);
+     
+
+    % ---- Valor objetivo (sem penalização) do melhor indivíduo ----
+    % (usa row vector se a tua funcao_objetivo preferir)
+    best_obj_final = funcao_objetivo(melhor_indiv(:).');
+    viavel_final   = verificar_restri(melhor_indiv, params);
+
+    % ---- Calcular restrições violadas ----
+    resti = calcular_restricoes(params, melhor_indiv);
+    violadas = resti > 0;
+    num_violadas = nnz(violadas);
+    if num_violadas > 0
+        max_violacao = max(resti(violadas));
+    else
+        max_violacao = 0;
+    end
+
+    % ---- Guardar em memória (sem ficheiros) ----
+    results(r).run_id           = r;
+    results(r).seed             = base_seed + r;
+    results(r).best_hist        = best_hist;
+    results(r).pior_el_hist     = pior_el_hist;
+    results(r).pen_hist         = pen_hist;
+    results(r).lambda_hist      = lambda_hist;
+    results(r).best_real_hist   = best_real_hist;  % variáveis (x1,x2,x3,x4)
+    results(r).best_f_hist      = best_f_hist;     % f(x) do melhor
+    results(r).std_hist         = std_hist;        % desvio padrão das variáveis
+    results(r).pop_checkpoints  = pop_checkpoints; % populações nos checkpoints
+    results(r).elite_checkpoints = elite_checkpoints; % elites nos checkpoints
+    results(r).k_checkpoints    = k_checkpoints;   % gerações dos checkpoints
+    results(r).entropia_x       = entropia_x;
+    results(r).k_stop           = k_stop;
+    results(r).motivo_paragem   = motivo_paragem;
+    results(r).best_merit_final = best_merit_final;
+    results(r).pior_el_merit_final = pior_el_merit_final;
+    results(r).best_obj_final   = best_obj_final;    % f(melhor)
+    results(r).viavel_final     = viavel_final;
+    results(r).num_violadas     = num_violadas;      % nº de restrições violadas
+    results(r).max_violacao     = max_violacao;      % valor máximo de violação
+    results(r).melhor_indiv     = melhor_indiv;
+    results(r).params           = params;
+    results(r).GA_settings      = struct('N_pop',N_pop,'N_elite',N_elite,'P_mut',P_mut,'P_cross',P_cross, ...
+                                         'n_bits',n_bits,'upper',upper,'lower',lower,'n_total_bits',n_total_bits);
+
+    % ---- Print explícito (inclui f(melhor)) ----
+    fprintf('Run %02d | f(melhor)=%.6f | mérito=%.6f | viável=%d | violadas=%d | max_viol=%.6f | k_stop=%d | %s\n', ...
+        r, best_obj_final, best_merit_final, viavel_final, num_violadas, max_violacao, k_stop, motivo_paragem);
+end
+
+% Selecionar melhor execução pelo mérito (ou troca para best_obj_final se quiseres)
+[~, best_idx] = max([results.best_merit_final]);
+best_run = results(best_idx);
+
+fprintf('\n>>> Melhor run: %d | f(melhor)=%.6f | mérito=%.6f | viável=%d | violadas=%d | max_viol=%.6f | k_stop=%d | %s\n\n', ...
+    best_run.run_id, best_run.best_obj_final, best_run.best_merit_final, best_run.viavel_final, ...
+    best_run.num_violadas, best_run.max_violacao, best_run.k_stop, best_run.motivo_paragem);
+
+%% ---------------- Plot ONLY da melhor execução ----------------
+best_hist = best_run.best_hist;
+pior_el_hist = best_run.pior_el_hist;
+pen_hist  = best_run.pen_hist;
+lambda_h  = best_run.lambda_hist;
+vars_hist = best_run.best_real_hist;  % variáveis (x1,x2,x3,x4) do melhor
+f_hist    = best_run.best_f_hist;     % f(x) do melhor
+std_hist  = best_run.std_hist;        % desvio padrão das variáveis
+k_stop    = best_run.k_stop;
+motivo    = best_run.motivo_paragem;
+melhor    = best_run.melhor_indiv;
+entropia_x = best_run.entropia_x;   % (T x 4) Shannon por variável
+pop_checks   = best_run.pop_checkpoints;   % populações nos checkpoints
+elite_checks = best_run.elite_checkpoints; % elites nos checkpoints
+k_checks     = best_run.k_checkpoints;     % gerações dos checkpoints
+
+% Valor da função objetivo do melhor indivíduo (já guardado)
+best_obj_val = best_run.best_obj_final;
+
+% --- Garantir vetores coluna ---
+best_hist    = best_hist(:);
+pior_el_hist = pior_el_hist(:);
+pen_hist     = pen_hist(:);
+lambda_h     = lambda_h(:);
+f_hist       = f_hist(:);
+
+% vars_hist deve ser matriz (T x 4), não precisa de (:)
+if ~isempty(vars_hist)
+    vars_hist = vars_hist;  % já é matriz
+end
+
+% std_hist também é matriz (T x 4)
+if ~isempty(std_hist)
+    std_hist = std_hist;  % já é matriz
+end
+
+% std_hist também é matriz (T x 4)
+if ~isempty(std_hist)
+    std_hist = std_hist;  % já é matriz
+end
+
+% --- Eixo de referência: uma amostra por geração (usa best_hist) ---
+T = numel(best_hist);
+t = (1:T).';
+
+% --- Ajustar pior_el_hist e pen_hist ao comprimento T (pad com NaN se faltar) ---
+padNaN = @(v, TT) [v(:); nan(max(0, TT - numel(v)), 1)];
+if numel(pior_el_hist) > T, pior_el_hist = pior_el_hist(1:T); else, pior_el_hist = padNaN(pior_el_hist, T); end
+if numel(pen_hist)  > T, pen_hist  = pen_hist(1:T);  else, pen_hist  = padNaN(pen_hist,  T); end
+if numel(f_hist)    > T, f_hist    = f_hist(1:T);    else, f_hist    = padNaN(f_hist,    T); end
+
+% Ajustar vars_hist (matriz T x 4)
+if ~isempty(vars_hist)
+    if size(vars_hist, 1) < T
+        % Pad com NaN se faltar linhas
+        vars_hist = [vars_hist; nan(T - size(vars_hist, 1), size(vars_hist, 2))];
+    elseif size(vars_hist, 1) > T
+        % Truncar se sobrar
+        vars_hist = vars_hist(1:T, :);
+    end
+end
+
+% Ajustar std_hist (matriz T x 4)
+if ~isempty(std_hist)
+    if size(std_hist, 1) < T
+        std_hist = [std_hist; nan(T - size(std_hist, 1), size(std_hist, 2))];
+    elseif size(std_hist, 1) > T
+        std_hist = std_hist(1:T, :);
+    end
+end
+
+% Ajustar std_hist (matriz T x 4)
+if ~isempty(std_hist)
+    if size(std_hist, 1) < T
+        std_hist = [std_hist; nan(T - size(std_hist, 1), size(std_hist, 2))];
+    elseif size(std_hist, 1) > T
+        std_hist = std_hist(1:T, :);
+    end
+end
+
+% --- Ajustar lambda_h: step-hold (repete último valor até T) ---
+if isempty(lambda_h)
+    lambda_h = nan(T,1);
+elseif numel(lambda_h) < T
+    lambda_h = [lambda_h; repmat(lambda_h(end), T - numel(lambda_h), 1)];
+elseif numel(lambda_h) > T
+    lambda_h = lambda_h(1:T);
+end
+
+% --- Proteger k_stop para não ultrapassar T ---
+k_stop_plot = min(max(1, k_stop), T);
+
+
+% ---------------- Figura 1: Histórico do Mérito ----------------
+fig1 = figure('Name','GA - Histórico do Mérito','Color',[1 1 1]); 
+plot(t, best_hist, 'LineWidth', 2.2, 'Color', [0.10 0.45 0.95]); hold on;
+
+% A segunda curva continua chamada "mean" no texto/legenda (mesmo sendo min da elite):
+plot(t, pior_el_hist, '--', 'LineWidth', 1.8, 'Color', [0.85 0.33 0.10]);
+
+% Marcar geração de paragem
+xline(k_stop_plot, ':k', 'LineWidth', 1.5, 'Label','k_{stop}', 'LabelOrientation','horizontal');
+
+% ----- Eixo Y baseado APENAS em best_hist -----
+best_hist_clean = best_hist(~isnan(best_hist));
+ymin = min(best_hist_clean);
+ymax = max(best_hist_clean);
+yrng = ymax - ymin;
+
+% Padding robusto (mesmo se quase constante)
+if yrng <= eps
+    pad = max(1e-6, 0.05 * max(1, abs(ymax)));   % padding mínimo
+else
+    pad = 0.05 * yrng;                           % 5% da amplitude
+end
+
+ylim([ymin - pad, ymax + pad]);
+
+% Ticks informativos: 5–6 marcas baseadas no melhor
+nticks = 6;
+yticks(linspace(ymin, ymax, nticks));
+
+% Labels e título
+xlabel('Geração'); 
+ylabel('Mérito (escala do melhor)');   % eixo y só do melhor
+title(sprintf('GA - Histórico | k_{stop}=%d | %s', k_stop, motivo), 'Interpreter','none');
+
+% Legenda: mantém "mean" no texto como pediste
+legend({'Melhor','Mínimo da elite'}, 'Location','best'); 
+grid on;
+
+% Mostrar f(melhor) no texto (subtítulo ou annotation)
+try
+    subtitle(sprintf('f(melhor) = %.6g', best_obj_val), 'Interpreter','none');  % MATLAB R2020b+
+catch
+    annotation(fig1, 'textbox', [0.15 0.82 0.3 0.08], ...
+        'String', sprintf('f(melhor) = %.6g', best_obj_val), ...
+        'FitBoxToText','on', 'EdgeColor','none', 'FontWeight','bold');
+end
+
+
+% ---------------- Figura 2: Penalização e Lambda ----------------
+fig2 = figure('Name','GA - Penalização e Lambda','Color',[1 1 1]);
+yyaxis left;  
+plot(t, pen_hist,  'LineWidth',1.8, 'Color',[0.15 0.7 0.25]); 
+ylabel('Penalização (melhor)');
+
+yyaxis right; 
+plot(t, lambda_h, '--', 'LineWidth',1.8, 'Color',[0.6 0.2 0.8]); 
+ylabel('\lambda');
+
+xlabel('Geração'); 
+title('Penalização do melhor e evolução de \lambda'); 
+grid on;
+
+
+% ---------------- Figura 3: Evolução de f(x) do Melhor ----------------
+fig3 = figure('Name','GA - Evolução de f(x)','Color',[1 1 1]);
+plot(t, f_hist, 'LineWidth', 2.2, 'Color', [0.85 0.15 0.15]); hold on;
+
+% Marcar geração de paragem
+xline(k_stop_plot, ':k', 'LineWidth', 1.5, 'Label','k_{stop}', 'LabelOrientation','horizontal');
+
+% Eixo Y baseado em f_hist
+f_hist_clean = f_hist(~isnan(f_hist));
+if ~isempty(f_hist_clean)
+    ymin_r = min(f_hist_clean);
+    ymax_r = max(f_hist_clean);
+    yrng_r = ymax_r - ymin_r;
+    
+    if yrng_r <= eps
+        pad_r = max(1e-6, 0.05 * max(1, abs(ymax_r)));
+    else
+        pad_r = 0.05 * yrng_r;
+    end
+    
+    ylim([ymin_r - pad_r, ymax_r + pad_r]);
+    yticks(linspace(ymin_r, ymax_r, 6));
+end
+
+xlabel('Geração');
+ylabel('f(x) - Função Objetivo');
+title(sprintf('Evolução de f(x) do Melhor Indivíduo | f_{final}=%.6g', best_obj_val), 'Interpreter','none');
+grid on;
+
+% Adicionar linha horizontal com o valor final
+yline(best_obj_val, '--b', sprintf('f_{final}=%.4g', best_obj_val), ...
+    'LineWidth', 1.2, 'LabelHorizontalAlignment', 'left');
+
+
+% ---------------- Figura 4: Evolução das Variáveis do Melhor ----------------
+fig4 = figure('Name','GA - Evolução das Variáveis','Color',[1 1 1]);
+
+% Nomes das variáveis (ajusta se necessário)
+var_names = {'h (espessura)', 'l (comprimento)', 't (largura)', 'b (altura)'};
+var_colors = [
+    0.00, 0.45, 0.74;  % azul
+    0.85, 0.33, 0.10;  % laranja
+    0.93, 0.69, 0.13;  % amarelo
+    0.49, 0.18, 0.56   % roxo
+];
+
+% Verificar se vars_hist existe e tem 4 colunas
+if ~isempty(vars_hist) && size(vars_hist, 2) == 4
+    
+    for i = 1:4
+        subplot(2, 2, i);
+        plot(t, vars_hist(:, i), 'LineWidth', 2.0, 'Color', var_colors(i, :)); hold on;
+        
+        % Marcar k_stop
+        xline(k_stop_plot, ':k', 'LineWidth', 1.2);
+        
+        % Valor final
+        val_final = melhor(i);
+        yline(val_final, '--', sprintf('%.4g', val_final), ...
+            'Color', var_colors(i, :), 'LineWidth', 1.0, ...
+            'LabelHorizontalAlignment', 'left');
+        
+        % Definir limites do eixo Y baseados nos bounds
+        y_lower = lower(i);
+        y_upper = upper(i);
+        y_range = y_upper - y_lower;
+        y_pad = 0.05 * y_range;  % 5% de padding
+        ylim([y_lower - y_pad, y_upper + y_pad]);
+        
+        % Adicionar linhas horizontais com os limites
+        yline(y_lower, ':', 'Lower', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, ...
+            'LabelHorizontalAlignment', 'right', 'Alpha', 0.5);
+        yline(y_upper, ':', 'Upper', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, ...
+            'LabelHorizontalAlignment', 'right', 'Alpha', 0.5);
+        
+        xlabel('Geração');
+        ylabel(sprintf('%s', var_names{i}));
+        title(sprintf('Variável x_%d: %s', i, var_names{i}));
+        grid on;
+    end
+    
+    sgtitle(sprintf('Evolução das Variáveis do Melhor Indivíduo (Run %d)', best_run.run_id));
+    
+else
+    fprintf('⚠️  best_real_hist não disponível ou dimensão incorreta.\n');
+    fprintf('    Certifica-te que o GA retorna best_real_hist (matriz T x 4) com as variáveis.\n');
+end
+
+
+% ---------------- Figura 5: Diversidade da População (Desvio Padrão) ----------------
+fig5 = figure('Name','GA - Diversidade da População','Color',[1 1 1]);
+
+if ~isempty(std_hist) && size(std_hist, 2) == 4
+    
+    for i = 1:4
+        subplot(2, 2, i);
+        plot(t, std_hist(:, i), 'LineWidth', 2.0, 'Color', var_colors(i, :)); hold on;
+        
+        % Marcar k_stop
+        xline(k_stop_plot, ':k', 'LineWidth', 1.2);
+        
+        % Linha em zero para referência
+        yline(0, '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, 'Alpha', 0.5);
+        
+        xlabel('Geração');
+        ylabel(sprintf('Desvio Padrão (%s)', var_names{i}));
+        title(sprintf('Diversidade x_%d: %s', i, var_names{i}));
+        grid on;
+        
+        % Eixo Y sempre começando em 0
+        ylim_curr = ylim;
+        ylim([0, max(ylim_curr(2), 0.01)]);  % mínimo de 0.01 para visualização
+    end
+    
+    sgtitle(sprintf('Evolução da Diversidade da População (Run %d) - σ de toda população (N=%d)', best_run.run_id, N_pop));
+    
+else
+    fprintf('⚠️  std_hist não disponível ou dimensão incorreta.\n');
+    fprintf('    Certifica-te que o GA retorna std_hist (matriz T x 4) com os desvios padrão.\n');
+end
+
+
+% ---------------- Figura 5: Diversidade da População (Desvio Padrão) ----------------
+%fig5 = figure('Name','GA - Diversidade da População','Color',[1 1 1]);
+
+%if ~isempty(std_hist) && size(std_hist, 2) == 4
+%    
+%    for i = 1:4
+%        subplot(2, 2, i);
+%        plot(t, std_hist(:, i), 'LineWidth', 2.0, 'Color', var_colors(i, :)); hold on;
+%        
+%        % Marcar k_stop
+%        xline(k_stop_plot, ':k', 'LineWidth', 1.2);
+%        
+%        % Linha em zero para referência
+%        yline(0, '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, 'Alpha', 0.5);
+%        
+%        xlabel('Geração');
+%        ylabel(sprintf('Desvio Padrão de %s', var_names{i}));
+%        title(sprintf('Diversidade da Variável x_%d: %s', i, var_names{i}));
+%        grid on;
+%        
+%        % Eixo Y sempre começando em 0
+%        ylim_curr = ylim;
+%        ylim([0, ylim_curr(2)]);
+%    end
+%    
+%    sgtitle(sprintf('Evolução da Diversidade da População (Run %d)', best_run.run_id));
+%    
+%else
+%    fprintf('⚠️  std_hist não disponível ou dimensão incorreta.\n');
+%end
+%
+%
+% ---------------- Figura 6: Entropia (Shannon) por Variável ----------------
+fig6 = figure('Name','GA - Entropia (Shannon) por Variável','Color',[1 1 1]);
+
+if ~isempty(entropia_x) && size(entropia_x, 2) == 4
+    
+    for i = 1:4
+        subplot(2, 2, i);
+        plot(t, entropia_x(:, i), 'LineWidth', 2.0, 'Color', var_colors(i, :)); hold on;
+        
+        % Marcar k_stop
+        xline(k_stop_plot, ':k', 'LineWidth', 1.2);
+        
+        % Referências
+        yline(0, '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.8, 'Alpha', 0.5);
+        yline(1, '--', 'Color', [0.6 0.6 1.0], 'LineWidth', 0.8, 'Alpha', 0.4);  % H máx (binário, base 2)
+        
+        xlabel('Geração');
+        ylabel(sprintf('Entropia H(%s) [bits]', var_names{i}));
+        title(sprintf('Entropia (Shannon) x_%d: %s', i, var_names{i}));
+        grid on;
+        
+        % Entropia (binário, base 2) ∈ [0, 1], com margem superior 0.2 para visualização
+        ylim([0, 1.2]);
+    end
+    
+    sgtitle(sprintf('Evolução da Entropia (Run %d) - Shannon por variável (N=%d)', best_run.run_id, N_pop));
+    
+else
+    fprintf('⚠️  entropia_x não disponível ou dimensão incorreta.\n');
+       fprintf('    Certifica-te que o GA retorna entropia_x (matriz T x 4) com Shannon por variável.\n');
+end
+
+
+%% ==================== SCATTER PLOTS (6 figuras, 3 checkpoints cada) ====================
+
+if ~isempty(pop_checks) && length(pop_checks) >= 3 && ~isempty(elite_checks)
+    
+    % Combinações de variáveis (x_i vs x_j)
+    combinacoes = [
+        1, 2;  % x1 vs x2
+        1, 3;  % x1 vs x3
+        1, 4;  % x1 vs x4
+        2, 3;  % x2 vs x3
+        2, 4;  % x2 vs x4
+        3, 4   % x3 vs x4
+    ];
+    
+    % Nomes das variáveis
+    var_names_short = {'h', 'l', 't', 'b'};
+    
+    % Criar 6 figuras
+    for fig_idx = 1:6
+        i_var = combinacoes(fig_idx, 1);
+        j_var = combinacoes(fig_idx, 2);
+        
+        figure('Name', sprintf('Scatter x%d vs x%d', i_var, j_var), 'Color', [1 1 1]);
+        
+        % 3 subplots (1 linha, 3 colunas) - um para cada checkpoint
+        for cp = 1:3
+            subplot(1, 3, cp);
+            
+            % Extrair população e elite do checkpoint
+            pop_cp = pop_checks{cp};      % N_pop x 4
+            elite_cp = elite_checks{cp};  % N_elite x 4
+            
+            % Plotar população não-elite (cinza claro, círculos vazios)
+            scatter(pop_cp(:, i_var), pop_cp(:, j_var), 50, ...
+                [0.7 0.7 0.7], 'o', 'LineWidth', 1.2); hold on;
+            
+            % Plotar elite (azul escuro, círculos vazios com borda azul)
+            scatter(elite_cp(:, i_var), elite_cp(:, j_var), 80, ...
+                [0.2 0.4 0.8], 'o', 'LineWidth', 1.5);
+            
+            % Limites dos bounds
+            xlim([lower(i_var) - 0.1*(upper(i_var)-lower(i_var)), ...
+                  upper(i_var) + 0.1*(upper(i_var)-lower(i_var))]);
+            ylim([lower(j_var) - 0.1*(upper(j_var)-lower(j_var)), ...
+                  upper(j_var) + 0.1*(upper(j_var)-lower(j_var))]);
+            
+            % Grid
+            grid on;
+            box on;
+            
+            xlabel(sprintf('x_%d: %s', i_var, var_names{i_var}));
+            ylabel(sprintf('x_%d: %s', j_var, var_names{j_var}));
+            title(sprintf('Generation %d', k_checks(cp)));
+            
+            % Legenda só no último subplot
+            if cp == 3
+                legend({'População', 'Elite'}, 'Location', 'best', 'FontSize', 9);
+            end
+        end
+        
+        sgtitle(sprintf('Population Distribution: x_%d (%s) vs x_%d (%s) - Run %d', ...
+            i_var, var_names_short{i_var}, j_var, var_names_short{j_var}, best_run.run_id));
+    end
+    
+else
+    fprintf('⚠️  pop_checkpoints ou elite_checkpoints não disponíveis.\n');
+end
+
+
+
+%% ---------------- Prints na consola (com f) ----------------
+fprintf('Melhor execução: run %d\n', best_run.run_id);
+fprintf('  f(melhor) = %.6f\n', best_obj_val);
+fprintf('  Mérito final = %.6f\n', best_run.best_merit_final);
+fprintf('  Viável = %d | k_stop = %d | %s\n', best_run.viavel_final, k_stop, motivo);

@@ -1,0 +1,336 @@
+
+function [melhor_indiv, best_hist, pior_el_hist, k_stop, motivo_paragem,pen_hist, lambda_hist,best_real_hist,best_f_hist,std_hist, entropia_x,pop_checkpoints, k_checkpoints, elite_checkpoints] = genetic_algorithm( ...
+    params, N_pop, N_elite, P_mut, P_cross, n_bits, n_total_bits, upper, lower, C, alfa, beta)
+
+    %-------------------- Parâmetros de paragem --------------------
+    max_gen      = 500;     % nº máximo de gerações
+    eps_improve  = 1e-6;    % melhoria mínima aceitável para considerar progresso
+    
+    motivo_paragem = 'max_gen atingido';  % default
+    %----------------------------------------------------------------
+
+    % 1) População inicial (binária)
+    pop = randi([0 1], N_pop, n_total_bits);
+
+    % 2) Histórico
+    best_hist      = nan(max_gen,1);
+    pen_hist       = nan(max_gen,1);
+    pior_el_hist   = nan(max_gen,1);
+    
+    
+    best_so_far = -inf;
+
+    best_f_hist     = nan(max_gen,1);
+    best_real_hist  = nan(max_gen,4);
+    std_hist        = nan(max_gen,4);
+    mean_real_hist  = nan(max_gen, 1);
+    entropia_x = nan(max_gen, 4);
+
+    lambda_hist     = nan(max_gen,1);   % valor de lambda por geração
+    % Inicialização
+    C_max = 100;
+    lambda = 10;
+    Nf = max(50,round(max_gen/8,0));
+
+    beta_1 = 1.2;
+    beta_2 = 1.1;
+
+    conta_top_zero     = 0;
+    conta_top_non_zero = 0;
+    k_stop             = max_gen;   % por defeito, pára no fim
+
+    % Checkpoints para guardar população
+    k_checkpoints = [10, floor(0.5*max_gen), floor(0.95*max_gen)];
+    pop_checkpoints = cell(3, 1);  % cell array para guardar as 3 populações
+    elite_checkpoints = cell(3, 1);  % cell array para guardar as 3 elites
+    checkpoint_count = 0;
+
+    mer_lambda = true;
+
+    for k = 1:max_gen
+        
+        
+        % pop: N_pop x n_total_bits, binária
+        start_col = 1;
+        
+        for z = 1:4
+            end_col = start_col + n_bits(z) - 1;
+            cols    = start_col:end_col;
+        
+            % Entropia por bit (coluna)
+            p1_bits = mean(pop(:, cols), 1);                    % 1 x L
+            p1_bits = max(min(p1_bits, 1-eps), eps);           % evitar log2(0)
+            H_bits  = -p1_bits.*log2(p1_bits) - ...
+                      (1-p1_bits).*log2(1-p1_bits);            % 1 x L, em bits (0..1)
+        
+            % Agregações úteis
+            H_gene_media = mean(H_bits);                        % 0..1 (média por bit)
+            H_gene_soma  = sum(H_bits);                         % 0..L (útil se quiseres pesar pelo nº de bits)
+            H_msb        = H_bits(1);                           % se MSB estiver na 1ª coluna
+            H_lsb        = H_bits(end);                         % se LSB for a última
+        
+            entropia_x(k, z)     = H_gene_media;                % principal (0..1)
+            entropia_soma(k, z)  = H_gene_soma;                 % opcional (0..L)
+            entropia_msb(k, z)   = H_msb;                       % diagnóstico
+            entropia_lsb(k, z)   = H_lsb;                       % diagnóstico
+        
+            start_col = end_col + 1;
+        end
+
+        
+        lambda_hist(k) = lambda;
+        % 3) Decode para valores reais
+        pop_real = decode(upper, lower, n_bits, pop, N_pop);
+                  
+        
+        % 4) Avaliar mérito
+        pen = zeros(N_pop,1);
+        Mer = zeros(N_pop, 1);
+        Aval = zeros(N_pop,1);
+        if mer_lambda == true
+            for i = 1:N_pop
+                x = pop_real(i, :).';
+                [Aval(i),pen(i)] = aval_matrix(x,params,lambda);
+            end
+            
+            for i = 1:N_pop
+    
+                if C_max<Aval(i)
+                    Aval(i) = C_max - 1e-6;
+                end
+            end
+    
+            for i = 1:N_pop
+               Mer(i) = C_max - Aval(i);
+            end
+    
+            % 5) Ordenar por mérito (descendente) e calcular estatísticas
+            [Mer_sorted, order] = sort(Mer, 'descend');
+            best_hist(k) = Mer_sorted(1);
+            pior_el_hist(k) = Mer_sorted(9);
+    
+            % 6) Atualizar melhor indivíduo (real)
+            melhor_indiv = pop_real(order(1), :);
+            
+            
+            % --- Checkpoints para ajustar lambda ---
+            
+            pen_hist(k) = pen(order(1));  % penalização do melhor atual
+            
+            if k ==1 && pen_hist(k) == 0
+                conta_top_zero = 1;
+            elseif k == 1 && pen_hist(k)>0
+                conta_top_non_zero = 1;
+            else
+                if pen_hist(k)>0 && pen_hist(k-1)>0
+                    conta_top_non_zero = conta_top_non_zero + 1;
+                elseif pen_hist(k)>0 && pen_hist(k-1) == 0
+                    conta_top_non_zero = 1;
+                    conta_top_zero = 0;
+                elseif pen_hist(k)==0 && pen_hist(k-1)==0
+                    conta_top_zero = conta_top_zero + 1;
+                elseif pen_hist(k)==0 && pen_hist(k-1)> 0
+                    conta_top_zero = 1;
+                    conta_top_non_zero = 0;
+                end
+            end
+           
+            if conta_top_non_zero == Nf
+                conta_top_non_zero = 0;
+                lambda = lambda * beta_1;
+                lambda_hist(end+1) = lambda;
+                % 4) Avaliar mérito
+                pen = zeros(N_pop,1);
+                Mer = zeros(N_pop, 1);
+                Aval = zeros(N_pop,1);
+                for i = 1:N_pop
+                    x = pop_real(i, :).';
+                    [Aval(i),pen(i)] = aval_matrix(x,params,lambda);
+                end
+                
+                for i = 1:N_pop
+        
+                    if C_max<Aval(i)
+                        Aval(i) = C_max - 1e-6;
+                    end
+                end
+        
+                for i = 1:N_pop
+                   Mer(i) = C_max - Aval(i);
+                end
+        
+                % 5) Ordenar por mérito (descendente) e calcular estatísticas
+                [Mer_sorted, order] = sort(Mer, 'descend');
+                best_hist(k) = Mer_sorted(1);
+                pior_el_hist(k) = Mer_sorted(9);
+        
+                % 6) Atualizar melhor indivíduo (real)
+                melhor_indiv = pop_real(order(1), :);
+            elseif conta_top_zero == Nf
+                conta_top_zero = 0;
+                lambda = lambda / beta_2;
+                lambda_hist(end+1) = lambda;
+                % 4) Avaliar mérito
+                pen = zeros(N_pop,1);
+                Mer = zeros(N_pop, 1);
+                Aval = zeros(N_pop,1);
+                for i = 1:N_pop
+                    x = pop_real(i, :).';
+                    [Aval(i),pen(i)] = aval_matrix(x,params,lambda);
+                end
+                
+                for i = 1:N_pop
+        
+                    if C_max<Aval(i)
+                        Aval(i) = C_max - 1e-6;
+                    end
+                end
+        
+                for i = 1:N_pop
+                   Mer(i) = C_max - Aval(i);
+                end
+        
+            % 5) Ordenar por mérito (descendente) e calcular estatísticas
+            [Mer_sorted, order] = sort(Mer, 'descend');
+            best_hist(k) = Mer_sorted(1);
+            pior_el_hist(k) = Mer_sorted(9);
+    
+            % 6) Atualizar melhor indivíduo (real)
+            melhor_indiv = pop_real(order(1), :);
+            end
+        else
+            % Caso mer_lambda == false
+            Mer = zeros(N_pop, 1);  
+            for i = 1:N_pop
+                x = pop_real(i, :).';
+                Mer(i) = merito(x, params, C, alfa, beta, k);  
+            end 
+            
+            % 5) Ordenar por mérito (descendente) e calcular estatísticas
+            [Mer_sorted, order] = sort(Mer, 'descend');
+            best_hist(k) = Mer_sorted(1);
+            pior_el_hist(k) = Mer_sorted(9);
+        
+            % 6) Atualizar melhor indivíduo (real)
+            melhor_indiv = pop_real(order(1), :);
+        end
+        
+        best_real_hist(k, :) = pop_real(order(1), :);
+        best_f_hist(k, :)    = funcao_objetivo(melhor_indiv);
+        mean_real_hist(k, :) = funcao_objetivo(mean(pop_real, 1));
+
+        for i = 1:4
+            std_hist(k, i) = std(pop_real(:, i));  % pop_real tem N_pop indivíduos
+        end
+
+        % Guardar população nos checkpoints
+        if ismember(k, k_checkpoints)
+            checkpoint_count = checkpoint_count + 1;
+            pop_checkpoints{checkpoint_count} = pop_real;  % guarda N_pop x 4
+            elite_checkpoints{checkpoint_count} = elite_reais; % guarda N_elite x 4
+        end
+               
+        % Determinar se houve melhoria suficiente nesta geração
+        improved = best_hist(k) > best_so_far + eps_improve;
+        
+        % Atualizar stall isolado (independente da viabilidade)
+        if improved
+            best_so_far     = best_hist(k);
+            stall_count_iso = 0;
+        else
+            stall_count_iso = stall_count_iso + 1;
+        end
+        
+        % Verificar viabilidade do melhor indivíduo
+        validade = verificar_restri(melhor_indiv, params);  % true se todas restrições <= 0
+        
+        % Atualizar stall combinado (só conta quando NÃO há melhoria e o melhor é viável)
+        if improved
+            stall_count_comb = 0;
+        else
+            if validade
+                stall_count_comb = stall_count_comb + 1;
+            else
+                stall_count_comb = 0;  % se deixou de ser viável, reset do combinado
+            end
+        end
+
+        % 9) Elite (binário e real)
+        N_elite_eff = min(N_elite, N_pop);
+        elite_idx   = order(1:N_elite_eff);
+        elite_reais = pop_real(elite_idx, :);
+        elite_bin   = encode(upper, lower, n_bits, elite_reais, N_elite_eff);
+
+        % 10) Seleção de pais
+        selected_idx = sus_selection(Mer, N_pop, N_elite_eff);
+        selected     = pop_real(selected_idx, :);
+
+        % 11) Crossover: filhos binários
+        filhos_bin = crossover_function(P_cross, selected, upper, lower, n_bits);
+
+        % 12) Mutação: filhos binários mutados
+        filhos_mutados = mutacao(filhos_bin, P_mut,n_bits);
+
+        % 13) Nova população = elite + filhos (ajuste de tamanho)
+        nova_pop = [elite_bin; filhos_mutados];
+
+        % Garantir dimensão N_pop
+        if size(nova_pop, 1) > N_pop
+            nova_pop = nova_pop(1:N_pop, :);
+        elseif size(nova_pop, 1) < N_pop
+            faltam = N_pop - size(nova_pop, 1);
+            rep = filhos_mutados;
+            if isempty(rep)
+                rep = elite_bin;
+            end
+            rep_needed = rep(mod(0:(faltam-1), size(rep, 1)) + 1, :);
+            nova_pop = [nova_pop; rep_needed];
+        end
+
+        % 14) Atualizar população
+        pop = nova_pop;
+    end
+
+    
+    valid_rows     = ~isnan(best_hist);
+    best_hist      = best_hist(valid_rows);
+    pior_el_hist   = pior_el_hist(valid_rows);
+
+    
+
+    %-------------------- Relatório final (prints) --------------------
+    % Mérito do melhor (na geração de paragem ou última)
+    best_merit = best_hist(end);
+
+    % Restrições e violações
+    resti = calcular_restricoes(params, melhor_indiv);  % vetor de restrições (≤0 é viável)
+    violadas = resti > 0;
+    num_violadas = nnz(violadas);
+    if num_violadas > 0
+        max_violacao = max(resti(violadas));
+    else
+        max_violacao = 0;
+    end
+
+    fprintf('\n===== RELATÓRIO GA =====\n');
+    fprintf('Motivo de paragem: %s\n', motivo_paragem);
+    fprintf('Geração de paragem (k): %d\n', k_stop);
+    fprintf('Melhor mérito: %.6f\n', best_merit);
+
+    % Imprimir melhor indivíduo (real)
+    fprintf('Melhor indivíduo (real): [');
+    fprintf(' %.6f', melhor_indiv);
+    fprintf(' ]\n');
+
+    % Imprimir restrições
+    fprintf('Nº de restrições violadas: %d\n', num_violadas);
+    if num_violadas > 0
+        fprintf('Valor máximo de violação: %.6f\n', max_violacao);
+    else
+        fprintf('Nenhuma restrição violada.\n');
+    end
+    fprintf('=========================\n');
+
+    % plot_best_real_hist(best_real_hist, k_stop)
+
+end
