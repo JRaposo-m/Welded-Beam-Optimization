@@ -99,10 +99,10 @@ Both classical methods converged to the theoretical optimum with no constraint v
 ```
 SMA7-Welded-Beam/
 │
-├── classicos/
+├── classical_methods/
 │   └── script_codigo.m     ← Main script (outer Augmented Lagrangian loop)
 │
-├── geneticos/
+├── genetic_algorithm/
 │   └── script_codigo.m     ← Main script (calls genetic_algorithm internally)
 │
 ├── report/
@@ -125,9 +125,9 @@ SMA7-Welded-Beam/
 
 ### Classical Methods
 
-1. Open MATLAB and navigate to the `classicos/` folder:
+1. Open MATLAB and navigate to the `classical_methods/` folder:
 ```matlab
-cd('path/to/classicos')
+cd('path/to/classical_methods')
 ```
 
 2. Run the script:
@@ -194,9 +194,9 @@ ub = [2.0;  10.0; 10.0; 2.0];
 
 ### Genetic Algorithm
 
-1. Open MATLAB and navigate to the `geneticos/` folder:
+1. Open MATLAB and navigate to the `genetic_algorithm/` folder:
 ```matlab
-cd('path/to/geneticos')
+cd('path/to/genetic_algorithm')
 ```
 
 2. Run the script:
