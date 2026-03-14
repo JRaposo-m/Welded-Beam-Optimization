@@ -23,7 +23,7 @@ max_iter = 500;
 for k = 1:max_iter
 
     g_novo = gradient_f(La,x);
-    %g_novo = calculo_grad_La(x,params,epsilon,lambda);
+   
     g_norm = norm(g_novo);
     
     
@@ -37,8 +37,10 @@ for k = 1:max_iter
     if k == 1
         d = -g_novo;
     else
-        beta = (norm(g_novo)) / (norm(g_antigo)); 
-        % beta = (g_novo' * (g_novo - g_antigo)) / abs(g_antigo' * g_antigo); 
+        beta = (norm(g_novo)) / (norm(g_antigo)); % Fletcher Reeves
+        % beta = (g_novo' * (g_novo - g_antigo)) / abs(g_antigo' * g_antigo);
+            % Polak - Ribière - to use this formula comment the Fletcher
+            % and uncomment the line 41
         d = -g_novo + beta * d;
     end
     
@@ -51,14 +53,7 @@ for k = 1:max_iter
     lb = [0.125; 0.1; 0.1; 0.1];   % limites inferiores
     ub = [2.0; 10.0; 10.0; 2.0]; % limites superiores
     x = min(max(x, lb), ub);
-    
-    % restri = calcular_restricoes(params,x);
-    
-    %for i = 1:6
-    %    vetor(i) = lambda(i) + (2/epsilon) * restri(i);
-    %    lambda(i) = max(0, lambda(i) + (2/epsilon) * restri(i));
-    %end
-    
+       
     
     g_antigo = g_novo;
 
