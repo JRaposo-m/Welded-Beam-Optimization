@@ -1,15 +1,8 @@
-# Welded Beam Optimization — Problem SMA7
+# Welded Beam Optimization
 
-**Faculty of Engineering, University of Porto (FEUP)**
-Master's in Mechanical Engineering | Mechanical Systems Optimization | 2025-26
-
-**Authors:** Diogo Morais · José Raposo · Nuno Pinto
-**Supervisor:** Prof. Carlos Alberto Conceição António
-
-| Section | Grade |
-|---------|-------|
-| Classical Methods | 19.5 / 20 |
-| Genetic Algorithm | 20 / 20 |
+Academic project for the Mechanical Systems Optimization course at FEUP (2025–26),
+in collaboration with Diogo Morais and Nuno Pinto.
+Supervisor: Prof. Carlos Alberto Conceição António
 
 ---
 
